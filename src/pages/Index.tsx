@@ -77,9 +77,9 @@ const Index = () => {
         </div>
 
         {/* Main Card */}
-        <div className="rounded-2xl border border-border bg-card shadow-card overflow-hidden">
+        <div className="rounded-2xl border border-border bg-card shadow-card overflow-hidden max-w-lg mx-auto">
           {/* Video / Canvas area */}
-          <div className="relative aspect-video w-full bg-secondary">
+          <div className="relative aspect-[4/3] w-full bg-secondary">
             <video
               ref={videoRef}
               className="absolute inset-0 h-full w-full object-cover"
