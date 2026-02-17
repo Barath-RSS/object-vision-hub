@@ -1,35 +1,70 @@
-import { useState, useRef, useCallback } from 'react';
-import { Scan, Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import { useRef, useState, useCallback, useEffect } from 'react';
+import {
+  Video, VideoOff, Loader2, AlertCircle, Sparkles, Zap, Camera, MonitorSpeaker,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { UploadZone } from '@/components/UploadZone';
-import { DetectionResults } from '@/components/DetectionResults';
-import { useObjectDetection } from '@/hooks/useObjectDetection';
+import { useObjectDetection, type Detection } from '@/hooks/useObjectDetection';
 
 const Index = () => {
-  const { loading, detecting, detections, error, processedImageUrl, detect } = useObjectDetection();
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
+  const {
+    modelLoading, detecting, detections, fps, error,
+    startDetection, stopDetection, model,
+  } = useObjectDetection();
 
-  const handleFileSelect = useCallback((file: File) => {
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-  }, []);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const handleDetect = useCallback(() => {
-    if (imgRef.current) {
-      detect(imgRef.current);
+  const startCamera = useCallback(async () => {
+    setCameraError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        setCameraOn(true);
+        if (canvasRef.current) {
+          startDetection(videoRef.current, canvasRef.current);
+        }
+      }
+    } catch {
+      setCameraError('Camera access denied. Please allow camera permissions.');
     }
-  }, [detect]);
+  }, [startDetection]);
 
-  const handleReset = useCallback(() => {
-    setPreviewUrl(null);
-  }, []);
+  const stopCamera = useCallback(() => {
+    stopDetection();
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    setCameraOn(false);
+  }, [stopDetection]);
+
+  useEffect(() => () => {
+    stopDetection();
+    streamRef.current?.getTracks().forEach(t => t.stop());
+  }, [stopDetection]);
+
+  // Group detections by class
+  const grouped = detections.reduce<Record<string, { count: number; maxScore: number }>>((acc, d) => {
+    if (!acc[d.class]) acc[d.class] = { count: 0, maxScore: 0 };
+    acc[d.class].count++;
+    acc[d.class].maxScore = Math.max(acc[d.class].maxScore, d.score);
+    return acc;
+  }, {});
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-8">
-      <div className="w-full max-w-xl">
+    <div className="flex min-h-screen flex-col items-center bg-background px-4 py-6">
+      <div className="w-full max-w-2xl">
         {/* Header */}
-        <div className="mb-6 text-center">
+        <div className="mb-5 text-center">
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
             <Sparkles className="h-5 w-5 text-primary-foreground" />
           </div>
@@ -37,99 +72,120 @@ const Index = () => {
             AI Object Detection
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Upload an image and detect objects using AI
+            Real-time object detection &amp; tracking using your camera
           </p>
         </div>
 
         {/* Main Card */}
-        <div className="rounded-2xl border border-border bg-card p-5 shadow-card sm:p-6">
-          {loading && (
-            <div className="flex flex-col items-center justify-center gap-3 py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Loading AI model…</p>
-            </div>
-          )}
+        <div className="rounded-2xl border border-border bg-card shadow-card overflow-hidden">
+          {/* Video / Canvas area */}
+          <div className="relative aspect-video w-full bg-secondary">
+            <video
+              ref={videoRef}
+              className="absolute inset-0 h-full w-full object-cover"
+              style={{ display: cameraOn ? 'none' : 'none' }}
+              playsInline
+              muted
+            />
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 h-full w-full object-cover"
+              style={{ display: cameraOn ? 'block' : 'none' }}
+            />
 
-          {!loading && (
-            <div className="space-y-4">
-              {/* Upload */}
-              {!processedImageUrl && (
-                <>
-                  <UploadZone onFileSelect={handleFileSelect} disabled={detecting} />
+            {!cameraOn && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                {modelLoading ? (
+                  <>
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="text-sm text-muted-foreground">Loading AI model…</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent">
+                      <Camera className="h-8 w-8 text-muted-foreground" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Click below to start your camera
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
 
-                  {/* Preview */}
-                  {previewUrl && (
-                    <>
-                      <div className="overflow-hidden rounded-xl border border-border">
-                        <img
-                          ref={imgRef}
-                          src={previewUrl}
-                          alt="Upload preview"
-                          className="w-full"
-                          crossOrigin="anonymous"
-                        />
-                      </div>
+            {/* Live badge + FPS */}
+            {cameraOn && (
+              <div className="absolute left-3 top-3 flex items-center gap-2">
+                <span className="flex items-center gap-1.5 rounded-full bg-destructive/90 px-2.5 py-1 text-xs font-semibold text-destructive-foreground backdrop-blur-sm">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-destructive-foreground" />
+                  LIVE
+                </span>
+                <span className="flex items-center gap-1 rounded-full bg-foreground/70 px-2.5 py-1 text-xs font-medium text-background backdrop-blur-sm">
+                  <Zap className="h-3 w-3" />
+                  {fps} FPS
+                </span>
+              </div>
+            )}
 
-                      <div className="flex gap-2">
-                        <Button
-                          onClick={handleDetect}
-                          disabled={detecting}
-                          className="flex-1 gap-2"
-                          size="lg"
-                        >
-                          {detecting ? (
-                            <>
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                              Detecting…
-                            </>
-                          ) : (
-                            <>
-                              <Scan className="h-4 w-4" />
-                              Detect Objects
-                            </>
-                          )}
-                        </Button>
-                        <Button
-                          onClick={handleReset}
-                          variant="outline"
-                          size="lg"
-                          disabled={detecting}
-                        >
-                          Clear
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
+            {/* Object count */}
+            {cameraOn && detections.length > 0 && (
+              <div className="absolute right-3 top-3 rounded-full bg-primary/90 px-2.5 py-1 text-xs font-semibold text-primary-foreground backdrop-blur-sm">
+                {detections.length} object{detections.length !== 1 ? 's' : ''}
+              </div>
+            )}
+          </div>
 
-              {/* Results */}
-              {processedImageUrl && (
-                <>
-                  <DetectionResults
-                    processedImageUrl={processedImageUrl}
-                    detections={detections}
-                  />
-                  <Button
-                    onClick={handleReset}
-                    variant="outline"
-                    className="w-full"
-                    size="lg"
+          {/* Controls */}
+          <div className="p-4">
+            {!cameraOn ? (
+              <Button
+                onClick={startCamera}
+                disabled={modelLoading}
+                className="w-full gap-2"
+                size="lg"
+              >
+                <Video className="h-4 w-4" />
+                Start Camera
+              </Button>
+            ) : (
+              <Button
+                onClick={stopCamera}
+                variant="destructive"
+                className="w-full gap-2"
+                size="lg"
+              >
+                <VideoOff className="h-4 w-4" />
+                Stop Camera
+              </Button>
+            )}
+
+            {/* Errors */}
+            {(error || cameraError) && (
+              <div className="mt-3 flex items-center gap-2 rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {error || cameraError}
+              </div>
+            )}
+
+            {/* Detection list */}
+            {cameraOn && Object.keys(grouped).length > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {Object.entries(grouped).map(([cls, { count, maxScore }]) => (
+                  <div
+                    key={cls}
+                    className="flex items-center justify-between rounded-lg bg-accent px-3 py-2"
                   >
-                    Detect Another Image
-                  </Button>
-                </>
-              )}
-
-              {/* Error */}
-              {error && (
-                <div className="flex items-center gap-2 rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  {error}
-                </div>
-              )}
-            </div>
-          )}
+                    <span className="text-xs font-medium capitalize text-accent-foreground">
+                      {cls}{count > 1 ? ` ×${count}` : ''}
+                    </span>
+                    <span className="text-xs font-semibold text-primary">
+                      {Math.round(maxScore * 100)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <p className="mt-4 text-center text-xs text-muted-foreground">
