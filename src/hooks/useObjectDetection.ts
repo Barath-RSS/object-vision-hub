@@ -5,17 +5,25 @@ import * as cocoSsd from '@tensorflow-models/coco-ssd';
 export interface Detection {
   class: string;
   score: number;
-  bbox: [number, number, number, number]; // [x, y, width, height]
+  bbox: [number, number, number, number];
 }
+
+const COLORS = [
+  '#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+  '#06b6d4', '#ec4899', '#14b8a6', '#f97316', '#6366f1',
+];
 
 export function useObjectDetection() {
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [modelLoading, setModelLoading] = useState(true);
   const [detecting, setDetecting] = useState(false);
   const [detections, setDetections] = useState<Detection[]>([]);
+  const [fps, setFps] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animFrameRef = useRef<number>(0);
+  const lastTimeRef = useRef(performance.now());
+  const fpsFrames = useRef(0);
+  const fpsInterval = useRef<number>(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -25,12 +33,12 @@ export function useObjectDetection() {
         const loaded = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         if (!cancelled) {
           setModel(loaded);
-          setLoading(false);
+          setModelLoading(false);
         }
-      } catch (err) {
+      } catch {
         if (!cancelled) {
-          setError('Failed to load AI model. Please refresh the page.');
-          setLoading(false);
+          setError('Failed to load AI model. Please refresh.');
+          setModelLoading(false);
         }
       }
     }
@@ -38,71 +46,98 @@ export function useObjectDetection() {
     return () => { cancelled = true; };
   }, []);
 
-  const detect = useCallback(async (imageElement: HTMLImageElement) => {
+  const startDetection = useCallback((
+    video: HTMLVideoElement,
+    canvas: HTMLCanvasElement,
+  ) => {
     if (!model) return;
     setDetecting(true);
     setError(null);
-    setDetections([]);
-    setProcessedImageUrl(null);
 
-    try {
-      const predictions = await model.detect(imageElement);
-      const results: Detection[] = predictions.map(p => ({
-        class: p.class,
-        score: p.score,
-        bbox: p.bbox as [number, number, number, number],
-      }));
-      setDetections(results);
+    const ctx = canvas.getContext('2d')!;
+    fpsFrames.current = 0;
+    lastTimeRef.current = performance.now();
 
-      // Draw bounding boxes on canvas
-      const canvas = canvasRef.current;
-      if (!canvas) {
-        canvas === null;
-        const c = document.createElement('canvas');
-        canvasRef.current = c;
+    fpsInterval.current = window.setInterval(() => {
+      const now = performance.now();
+      const elapsed = (now - lastTimeRef.current) / 1000;
+      setFps(Math.round(fpsFrames.current / elapsed));
+      fpsFrames.current = 0;
+      lastTimeRef.current = now;
+    }, 1000);
+
+    const loop = async () => {
+      if (video.readyState >= 2) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+
+        try {
+          const predictions = await model.detect(video);
+          const results: Detection[] = predictions.map(p => ({
+            class: p.class,
+            score: p.score,
+            bbox: p.bbox as [number, number, number, number],
+          }));
+          setDetections(results);
+
+          // Draw boxes
+          const scale = canvas.width / 500;
+          results.forEach((det, i) => {
+            const [x, y, w, h] = det.bbox;
+            const color = COLORS[i % COLORS.length];
+            const lw = Math.max(2, 2.5 * scale);
+            const fontSize = Math.max(12, 14 * scale);
+
+            // Box
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lw;
+            ctx.strokeRect(x, y, w, h);
+
+            // Label bg
+            const label = `${det.class} ${Math.round(det.score * 100)}%`;
+            ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
+            const tm = ctx.measureText(label);
+            const th = fontSize + 8;
+            const tw = tm.width + 12;
+            const ly = y > th ? y - th : y;
+
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.85;
+            ctx.beginPath();
+            const r = 4;
+            ctx.roundRect(x, ly, tw, th, [r, r, r, r]);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, x + 6, ly + fontSize + 1);
+          });
+        } catch {
+          // skip frame
+        }
+        fpsFrames.current++;
       }
-      const c = canvasRef.current!;
-      c.width = imageElement.naturalWidth;
-      c.height = imageElement.naturalHeight;
-      const ctx = c.getContext('2d')!;
-      ctx.drawImage(imageElement, 0, 0);
+      animFrameRef.current = requestAnimationFrame(loop);
+    };
 
-      const colors = [
-        '#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-        '#06b6d4', '#ec4899', '#14b8a6', '#f97316', '#6366f1',
-      ];
-
-      results.forEach((det, i) => {
-        const [x, y, w, h] = det.bbox;
-        const color = colors[i % colors.length];
-        const lineWidth = Math.max(2, Math.min(4, c.width / 300));
-        const fontSize = Math.max(14, Math.min(22, c.width / 40));
-
-        ctx.strokeStyle = color;
-        ctx.lineWidth = lineWidth;
-        ctx.strokeRect(x, y, w, h);
-
-        const label = `${det.class} ${Math.round(det.score * 100)}%`;
-        ctx.font = `bold ${fontSize}px Inter, system-ui, sans-serif`;
-        const textMetrics = ctx.measureText(label);
-        const textHeight = fontSize + 8;
-        const textWidth = textMetrics.width + 12;
-
-        const labelY = y > textHeight ? y - textHeight : y;
-        ctx.fillStyle = color;
-        ctx.fillRect(x, labelY, textWidth, textHeight);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(label, x + 6, labelY + fontSize + 2);
-      });
-
-      const url = c.toDataURL('image/png');
-      setProcessedImageUrl(url);
-    } catch (err) {
-      setError('Detection failed. Please try a different image.');
-    } finally {
-      setDetecting(false);
-    }
+    animFrameRef.current = requestAnimationFrame(loop);
   }, [model]);
 
-  return { loading, detecting, detections, error, processedImageUrl, detect };
+  const stopDetection = useCallback(() => {
+    cancelAnimationFrame(animFrameRef.current);
+    clearInterval(fpsInterval.current);
+    setDetecting(false);
+    setDetections([]);
+    setFps(0);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      cancelAnimationFrame(animFrameRef.current);
+      clearInterval(fpsInterval.current);
+    };
+  }, []);
+
+  return { modelLoading, detecting, detections, fps, error, startDetection, stopDetection, model };
 }
