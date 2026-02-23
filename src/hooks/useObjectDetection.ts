@@ -112,7 +112,12 @@ export function useObjectDetection() {
       if (video.readyState >= 2) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
+
+        // Mirror the canvas so front camera isn't inverted
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, -canvas.width, 0);
+        ctx.restore();
 
         try {
           // Request more boxes from the model, then filter ourselves
@@ -131,7 +136,9 @@ export function useObjectDetection() {
           // Draw boxes
           const scale = canvas.width / 500;
           results.forEach((det, i) => {
-            const [x, y, w, h] = det.bbox;
+            const [ox, y, w, h] = det.bbox;
+            // Mirror the x coordinate to match flipped canvas
+            const x = canvas.width - ox - w;
             const color = COLORS[i % COLORS.length];
             const lw = Math.max(2, 2.5 * scale);
             const fontSize = Math.max(12, 14 * scale);
