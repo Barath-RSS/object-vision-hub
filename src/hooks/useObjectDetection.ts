@@ -13,6 +13,47 @@ const COLORS = [
   '#06b6d4', '#ec4899', '#14b8a6', '#f97316', '#6366f1',
 ];
 
+const MIN_SCORE = 0.45;
+const MAX_DETECTIONS = 20;
+const NMS_IOU_THRESHOLD = 0.5;
+
+/** Intersection-over-Union for two boxes [x,y,w,h] */
+function iou(a: number[], b: number[]): number {
+  const x1 = Math.max(a[0], b[0]);
+  const y1 = Math.max(a[1], b[1]);
+  const x2 = Math.min(a[0] + a[2], b[0] + b[2]);
+  const y2 = Math.min(a[1] + a[3], b[1] + b[3]);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const areaA = a[2] * a[3];
+  const areaB = b[2] * b[3];
+  return inter / (areaA + areaB - inter);
+}
+
+/** Per-class Non-Max Suppression */
+function nms(dets: Detection[], iouThresh: number): Detection[] {
+  // Group by class
+  const byClass: Record<string, Detection[]> = {};
+  for (const d of dets) {
+    (byClass[d.class] ??= []).push(d);
+  }
+
+  const kept: Detection[] = [];
+  for (const cls of Object.keys(byClass)) {
+    const sorted = byClass[cls].sort((a, b) => b.score - a.score);
+    const suppress = new Set<number>();
+    for (let i = 0; i < sorted.length; i++) {
+      if (suppress.has(i)) continue;
+      kept.push(sorted[i]);
+      for (let j = i + 1; j < sorted.length; j++) {
+        if (iou(sorted[i].bbox, sorted[j].bbox) > iouThresh) {
+          suppress.add(j);
+        }
+      }
+    }
+  }
+  return kept;
+}
+
 export function useObjectDetection() {
   const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
   const [modelLoading, setModelLoading] = useState(true);
@@ -30,6 +71,7 @@ export function useObjectDetection() {
     async function loadModel() {
       try {
         await tf.ready();
+        // Use mobilenet_v2 for best accuracy in COCO-SSD
         const loaded = await cocoSsd.load({ base: 'mobilenet_v2' });
         if (!cancelled) {
           setModel(loaded);
@@ -73,12 +115,17 @@ export function useObjectDetection() {
         ctx.drawImage(video, 0, 0);
 
         try {
-          const predictions = await model.detect(video);
-          const results: Detection[] = predictions.map(p => ({
+          // Request more boxes from the model, then filter ourselves
+          const predictions = await model.detect(video, MAX_DETECTIONS, MIN_SCORE);
+
+          const raw: Detection[] = predictions.map(p => ({
             class: p.class,
             score: p.score,
             bbox: p.bbox as [number, number, number, number],
           }));
+
+          // Apply per-class NMS to remove duplicate / overlapping boxes
+          const results = nms(raw, NMS_IOU_THRESHOLD);
           setDetections(results);
 
           // Draw boxes
@@ -105,8 +152,7 @@ export function useObjectDetection() {
             ctx.fillStyle = color;
             ctx.globalAlpha = 0.85;
             ctx.beginPath();
-            const r = 4;
-            ctx.roundRect(x, ly, tw, th, [r, r, r, r]);
+            ctx.roundRect(x, ly, tw, th, [4, 4, 4, 4]);
             ctx.fill();
             ctx.globalAlpha = 1;
 
