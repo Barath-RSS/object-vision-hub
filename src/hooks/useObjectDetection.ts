@@ -72,7 +72,7 @@ export function useObjectDetection() {
       try {
         await tf.ready();
         // Use mobilenet_v2 for best accuracy in COCO-SSD
-        const loaded = await cocoSsd.load({ base: 'mobilenet_v2' });
+        const loaded = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         if (!cancelled) {
           setModel(loaded);
           setModelLoading(false);
